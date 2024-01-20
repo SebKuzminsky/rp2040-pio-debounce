@@ -1,0 +1,87 @@
+; Shift in the current value of the GPIO on each loop.  If the ISR is
+; all-bits-0 or all-bits-1, that's a debounced button state.  If it's
+; different than the previously reported state, push it to the RX FIFO
+; for the main processor to deal with.
+
+.program debounce
+    MOV Y, ~NULL  ; set Y to all-bits-1, this is the first state we look for
+
+start:
+.wrap_target
+    MOV ISR, X
+    IN PINS, 1
+    MOV X, ISR
+    JMP X!=Y start  ; X (and thus ISR) is NOT the state we're looking for, so DONT push
+
+do_push:
+    PUSH noblock
+    MOV Y, ~Y  ; invert Y, we're now looking for the *other* state
+
+.wrap
+
+
+
+% c-sdk {
+
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+
+static PIO debounce_pio;
+static uint debounce_sm;
+
+static inline void debounce_init(PIO pio, uint offset, uint debounce_gpio) {
+    debounce_pio = pio;
+
+    debounce_sm = pio_claim_unused_sm(debounce_pio, true);
+
+    pio_sm_set_consecutive_pindirs(debounce_pio, debounce_sm, debounce_gpio, 1, false);
+
+    pio_sm_config c = debounce_program_get_default_config(offset);
+
+    sm_config_set_in_pins(&c, debounce_gpio); // for WAIT, IN
+
+    // shift to left, autopull disabled
+    sm_config_set_in_shift(&c, false, false, 32);
+
+    // We only need the RX FIFO.
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+    //
+    // We want a debounce period of about 5 ms, so run this PIO instance
+    // clock pretty slow.
+    //
+    // NOTE: This clock affects *all 4* state machines in this PIO
+    // instance!
+    //
+    // The main GPIO sampling loop is 4 instructions long, so 4 cycles
+    // per sample.  It needs 32 consecutive identical samples to register
+    // a debounced edge, which is 128 cycles.
+    //
+    // 5000 µs / 128 cycles = 39 µs/cycle
+    // 39 µs/cycle ~= 25_000 Hz
+    // clk_sys Hz / div = 25_000
+    // div = clk_sys / 25_000
+
+    uint32_t clk_sys_hz = clock_get_hz(clk_sys);
+    uint32_t divisor = clk_sys_hz / (25*1000);
+    sm_config_set_clkdiv_int_frac(&c, divisor, 0);
+
+    pio_sm_init(debounce_pio, debounce_sm, offset, &c);
+    pio_sm_set_enabled(debounce_pio, debounce_sm, true);
+}
+
+
+static inline bool debounce_get_state(bool & state) {
+    int n;
+
+    n = pio_sm_get_rx_fifo_level(debounce_pio, debounce_sm);
+    if (n > 0) {
+        state = pio_sm_get_blocking(debounce_pio, debounce_sm);
+        return true;
+    }
+
+    return false;
+}
+
+%}
