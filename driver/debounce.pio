@@ -73,8 +73,6 @@ static inline void debounce_init(PIO pio, uint offset, uint debounce_gpio) {
 
 
 static inline bool debounce_get_state(bool & state) {
-    int n;
-
     if (pio_sm_is_rx_fifo_empty(debounce_pio, debounce_sm)) {
         return false;
     }
