@@ -75,13 +75,12 @@ static inline void debounce_init(PIO pio, uint offset, uint debounce_gpio) {
 static inline bool debounce_get_state(bool & state) {
     int n;
 
-    n = pio_sm_get_rx_fifo_level(debounce_pio, debounce_sm);
-    if (n > 0) {
-        state = pio_sm_get_blocking(debounce_pio, debounce_sm);
-        return true;
+    if (pio_sm_is_rx_fifo_empty(debounce_pio, debounce_sm)) {
+        return false;
     }
 
-    return false;
+    state = pio_sm_get_blocking(debounce_pio, debounce_sm);
+    return true;
 }
 
 %}
